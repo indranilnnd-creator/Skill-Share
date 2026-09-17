@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skill Share - Local LLM Workbench</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --bg-elevated: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --accent: #58a6ff;
+  --accent-hover: #79c0ff;
+  --success: #3fb950;
+  --warning: #d29922;
+  --danger: #f85149;
+  --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
+  --radius: 6px;
+  --shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+header {
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+header h1 { font-size: 1.25rem; font-weight: 600; color: var(--accent); }
+.header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.tab-bar {
+  display: flex;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+}
+.tab-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  padding: 14px 20px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-content { display: none; flex: 1; overflow: auto; padding: 24px; }
+.tab-content.active { display: flex; flex-direction: column; }
+.btn {
+  background: var(--accent);
+  color: #0d1117;
+  border: none;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  font-weight: 500;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: background 0.15s;
+}
+.btn:hover { background: var(--accent-hover); }
+.btn:disabled { background: #30363d; color: var(--text-muted); cursor: not-allowed; }
+.btn.secondary { background: #238636; }
+.btn.secondary:hover { background: #2ea043; }
+.btn.danger { background: var(--danger); }
+.btn.danger:hover { background: #ff7b72; }
+.btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+.btn.ghost:hover { background: var(--bg-elevated); }
+input, select, textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-family: inherit;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(88,166,255,0.15);
+}
+label { display: block; margin-bottom: 4px; font-size: 0.8rem; color: var(--text-muted); }
+.card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.card-title { font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.section { margin-bottom: 24px; }
+.section-title { font-size: 0.875rem; font-weight: 600; margin-bottom: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.file-drop {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 32px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.file-drop:hover, .file-drop.drag-over { border-color: var(--accent); background: rgba(88,166,255,0.05); }
+.file-drop input { display: none; }
+.file-list { display: flex; flex-direction: column; gap: 8px; }
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.file-item .file-icon { font-size: 1.25rem; }
+.file-item .file-info { flex: 1; min-width: 0; }
+.file-item .file-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-item .file-meta { font-size: 0.75rem; color: var(--text-muted); }
+.file-item .file-remove { color: var(--text-muted); background: none; border: none; cursor: pointer; padding: 4px; }
+.file-item .file-remove:hover { color: var(--danger); }
+.skill-list { display: flex; flex-direction: column; gap: 8px; }
+.skill-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.skill-item input[type="checkbox"] { margin-top: 4px; width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; }
+.skill-item .skill-text { flex: 1; font-size: 0.875rem; }
+.skill-item .skill-actions { display: flex; gap: 4px; }
+.icon-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px 8px; border-radius: 4px; font-size: 0.875rem; }
+.icon-btn:hover { background: var(--bg-elevated); color: var(--text); }
+.prompt-area { min-height: 120px; resize: vertical; font-family: var(--font-mono); font-size: 0.875rem; line-height: 1.5; width: 100%; }
+.output-area { min-height: 200px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; font-family: var(--font-mono); font-size: 0.875rem; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word; overflow: auto; flex: 1; }
+.progress-bar { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; margin: 8px 0; }
+.progress-bar .fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.2s; }
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.status-badge.ready { background: rgba(63,185,80,0.15); color: var(--success); }
+.status-badge.loading { background: rgba(210,153,34,0.15); color: var(--warning); }
+.status-badge.error { background: rgba(248,81,73,0.15); color: var(--danger); }
+.status-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.setting-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.setting-row label { margin-bottom: 0; min-width: 140px; }
+.setting-row input[type="number"], .setting-row select { width: 100px; }
+.setting-row input[type="range"] { flex: 1; min-width: 200px; }
+.log-area { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; font-family: var(--font-mono); font-size: 0.75rem; max-height: 200px; overflow: auto; color: var(--text-muted); }
+.log-area .log-line { margin: 2px 0; }
+.log-area .log-info { color: var(--accent); }
+.log-area .log-success { color: var(--success); }
+.log-area .log-warn { color: var(--warning); }
+.log-area .log-error { color: var(--danger); }
+.footer { padding: 16px 24px; border-top: 1px solid var(--border); background: var(--bg-elevated); font-size: 0.75rem; color: var(--text-muted); text-align: center; }
+@media (max-width: 768px) {
+  header, .tab-bar, .tab-content { padding-left: 16px; padding-right: 16px; }
+  .tab-btn { padding: 12px 16px; font-size: 0.8rem; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Skill Share</h1>
+  <div class="header-actions">
+    <span id="modelStatus" class="status-badge loading"><span class="dot"></span> No model loaded</span>
+    <button id="loadModelBtn" class="btn">Load Model</button>
+    <input type="file" id="modelFileInput" accept=".gguf" style="display:none">
+  </div>
+</header>
+<nav class="tab-bar" role="tablist">
+  <button class="tab-btn active" role="tab" data-tab="skills" aria-selected="true">Skills</button>
+  <button class="tab-btn" role="tab" data-tab="files" aria-selected="false">Files</button>
+  <button class="tab-btn" role="tab" data-tab="process" aria-selected="false">Process</button>
+  <button class="tab-btn" role="tab" data-tab="export" aria-selected="false">Export</button>
+  <button class="tab-btn" role="tab" data-tab="settings" aria-selected="false">Settings</button>
+</nav>
+<main>
+  <section class="tab-content active" id="tab-skills" role="tabpanel">
+    <div class="section">
+      <div class="section-title">Skill Library</div>
+      <div class="card">
+        <div class="card-title">Add New Skill</div>
+        <div class="setting-row">
+          <label for="skillName">Name</label>
+          <input type="text" id="skillName" placeholder="e.g., Summarizer, Formatter, Analyzer" style="flex:1; min-width:200px;">
+        </div>
+        <label for="skillPrompt">Instructions</label>
+        <textarea id="skillPrompt" class="prompt-area" placeholder="Write natural-language instructions for this skill. Example: 'Extract key points from the document and present them as bullet points. Keep each point under 20 words.'"></textarea>
+        <div style="margin-top:8px; display:flex; gap:8px;">
+          <button id="addSkillBtn" class="btn">Add Skill</button>
+          <button id="importSkillsBtn" class="btn ghost">Import JSON</button>
+          <button id="exportSkillsBtn" class="btn ghost">Export JSON</button>
+          <input type="file" id="importSkillsFile" accept=".json" style="display:none">
+        </div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Saved Skills (<span id="skillCount">0</span>)</div>
+      <div id="skillList" class="skill-list"></div>
+    </div>
+  </section>
+
+  <section class="tab-content" id="tab-files" role="tabpanel">
+    <div class="section">
+      <div class="section-title">Upload Documents</div>
+      <div class="card">
+        <div class="file-drop" id="fileDrop">
+          <input type="file" id="fileInput" accept=".docx,.pdf,.md,.txt,.csv,.xlsx,.xls" multiple>
+          <p>Drag & drop files here, or click to browse</p>
+          <p style="margin-top:8px; font-size:0.8rem; color:var(--text-muted);">Supported: .docx, .pdf, .md, .txt, .csv, .xlsx, .xls (max ~50 MB each)</p>
+        </div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Loaded Files (<span id="fileCount">0</span>)</div>
+      <div id="fileList" class="file-list"></div>
+    </div>
+  </section>
+
+  <section class="tab-content" id="tab-process" role="tabpanel">
+    <div class="grid-2">
+      <div class="card" style="flex:1; display:flex; flex-direction:column;">
+        <div class="card-title">Prompt</div>
+        <textarea id="promptInput" class="prompt-area" placeholder="Enter your prompt here. Selected skills will be prepended as system instructions."></textarea>
+        <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="runBtn" class="btn" disabled>Run</button>
+          <button id="stopBtn" class="btn danger" disabled>Stop</button>
+          <button id="clearOutputBtn" class="btn ghost">Clear Output</button>
+        </div>
+        <div id="progressContainer" class="progress-bar" style="display:none;"><div class="fill"></div></div>
+        <div id="progressText" style="font-size:0.75rem; color:var(--text-muted); display:none;"></div>
+      </div>
+      <div class="card" style="flex:1; display:flex; flex-direction:column;">
+        <div class="card-title">Output</div>
+        <div id="outputArea" class="output-area" aria-live="polite">Run a prompt to see output here...</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px;">
+      <div class="card-title">Processing Log</div>
+      <div id="logArea" class="log-area"></div>
+    </div>
+  </section>
+
+  <section class="tab-content" id="tab-export" role="tabpanel">
+    <div class="section">
+      <div class="section-title">Generate Output File</div>
+      <div class="card">
+        <div class="grid-3">
+          <div>
+            <label for="exportFormat">Format</label>
+            <select id="exportFormat">
+              <option value="md">Markdown (.md)</option>
+              <option value="txt">Plain Text (.txt)</option>
+              <option value="html">HTML (.html)</option>
+              <option value="csv">CSV (.csv)</option>
+              <option value="docx">Word Document (.docx)</option>
+              <option value="xlsx">Excel Spreadsheet (.xlsx)</option>
+              <option value="pdf">PDF (.pdf) - simple text</option>
+            </select>
+          </div>
+          <div>
+            <label for="exportFilename">Filename (no extension)</label>
+            <input type="text" id="exportFilename" placeholder="output" value="output">
+          </div>
+          <div>
+            <label for="exportSource">Source</label>
+            <select id="exportSource">
+              <option value="output">Current Output Area</option>
+              <option value="last-result">Last Structured Result</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:12px; display:flex; gap:8px;">
+          <button id="generateExportBtn" class="btn secondary">Generate & Download</button>
+          <button id="previewExportBtn" class="btn ghost">Preview</button>
+        </div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Last Structured Result (for table/CSV/Excel export)</div>
+      <div id="structuredPreview" class="output-area" style="min-height:150px;">No structured data yet. Run a prompt that produces JSON/CSV/table output.</div>
+    </div>
+  </section>
+
+  <section class="tab-content" id="tab-settings" role="tabpanel">
+    <div class="section">
+      <div class="section-title">Model Settings</div>
+      <div class="card">
+        <div class="setting-row">
+          <label for="ctxSize">Context Size (tokens)</label>
+          <select id="ctxSize"><option value="2048">2048</option><option value="4096" selected>4096</option><option value="8192">8192</option></select>
+        </div>
+        <div class="setting-row">
+          <label for="nThreads">CPU Threads</label>
+          <input type="number" id="nThreads" value="4" min="1" max="16">
+        </div>
+        <div class="setting-row">
+          <label for="nGpuLayers">GPU Layers (WebGPU)</label>
+          <input type="number" id="nGpuLayers" value="99" min="0" max="99" title="0 = CPU only, 99 = all layers to GPU">
+        </div>
+        <div class="setting-row">
+          <label for="temperature">Temperature</label>
+          <input type="range" id="temperature" min="0" max="2" step="0.1" value="0.7">
+          <span id="tempValue" style="min-width:30px;">0.7</span>
+        </div>
+        <div class="setting-row">
+          <label for="topP">Top-p</label>
+          <input type="range" id="topP" min="0" max="1" step="0.05" value="0.9">
+          <span id="topPValue" style="min-width:30px;">0.9</span>
+        </div>
+        <div class="setting-row">
+          <label for="maxTokens">Max Tokens</label>
+          <input type="number" id="maxTokens" value="2048" min="128" max="8192" step="128">
+        </div>
+        <button id="saveSettingsBtn" class="btn" style="margin-top:8px;">Save Settings</button>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Model Management</div>
+      <div class="card">
+        <p style="margin-bottom:12px; color:var(--text-muted);">The model file handle is stored for quick reconnect on next visit.</p>
+        <button id="reconnectModelBtn" class="btn ghost" disabled>Reconnect Saved Model</button>
+        <button id="forgetModelBtn" class="btn danger" style="margin-left:8px;">Forget Model</button>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Data Management</div>
+      <div class="card">
+        <button id="clearAllDataBtn" class="btn danger">Clear All Local Data (skills, settings, model handle)</button>
+      </div>
+    </div>
+  </section>
+</main>
+<footer class="footer">Skill Share - Fully offline, no install, no data leaves this browser. Model runs locally via WebAssembly.</footer>
+
+<script src="lib/mammoth.browser.min.js"></script>
+<script src="lib/pdf.min.js"></script>
+<script src="lib/pdf.worker.min.js"></script>
+<script src="lib/xlsx.full.min.js"></script>
+<script src="lib/docx.umd.js"></script>
+<script src="lib/jspdf.umd.min.js"></script>
+<script src="lib/wllama.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
