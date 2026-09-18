@@ -13,7 +13,6 @@ const STORAGE_KEYS = {
   LAST_RESULT: 'skillshare_last_result'
 };
 
-let WllamaClass = null;
 let wllama = null;
 let modelLoaded = false;
 let currentAbortController = null;
@@ -30,26 +29,25 @@ let settings = {
 let lastStructuredResult = null;
 
 async function loadWllamaModule() {
-  if (WllamaClass) return WllamaClass;
+  if (window.Wllama) return window.Wllama;
   try {
     log('Loading wllama module...', 'info');
-    const esmResponse = await fetch('lib/wllama.esm.js');
-    const esmText = await esmResponse.text();
-    const esmBlob = new Blob([esmText], { type: 'application/javascript' });
-    const esmUrl = URL.createObjectURL(esmBlob);
-    const module = await import(esmUrl);
-    WllamaClass = module.Wllama || module.default;
-    if (!WllamaClass) {
-      for (const key of Object.keys(module)) {
-        if (key.toLowerCase().includes('wllama')) {
-          WllamaClass = module[key];
-          break;
-        }
-      }
-    }
-    if (!WllamaClass) throw new Error('Wllama class not found in module');
+    const response = await fetch('lib/wllama.min.js');
+    const code = await response.text();
+    
+    // Wrap the ESM bundle to expose Wllama on window
+    // Remove export statements and assign to window
+    const wrappedCode = code
+      .replace(/export\s+\{[\s\S]*?\}/g, '')  // Remove export { ... }
+      .replace(/export\s+(const|let|var|function|class)\s+/g, '$1 ')  // Remove export keywords
+      + '\nwindow.Wllama = Wllama;\nwindow.CacheManager = CacheManager;\nwindow.ModelManager = ModelManager;\nwindow.Model = Model;\nwindow.WllamaError = WllamaError;\nwindow.WllamaAbortError = WllamaAbortError;\nwindow.WllamaRuntimeError = WllamaRuntimeError;\nwindow.LogLevel = LogLevel;\nwindow.LoggerWithoutDebug = LoggerWithoutDebug;\n';
+    
+    // Execute the wrapped code
+    new Function(wrappedCode)();
+    
+    if (!window.Wllama) throw new Error('Wllama not exposed on window');
     log('wllama module loaded', 'success');
-    return WllamaClass;
+    return window.Wllama;
   } catch (err) {
     log('Failed to load wllama module: ' + err.message, 'error');
     throw err;
@@ -431,7 +429,7 @@ async function initializeWllama(modelFile) {
     const wasmUrl = URL.createObjectURL(new Blob([wasmArrayBuffer], { type: 'application/wasm' }));
     const modelUrl = URL.createObjectURL(modelFile);
 
-    wllama = new WllamaClass({
+    wllama = new window.Wllama({
       default: wasmUrl
     });
 
