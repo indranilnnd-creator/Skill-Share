@@ -69,6 +69,10 @@ function updateFileCount() {
   document.getElementById('fileCount').textContent = files.length;
 }
 
+function updateRunButton() {
+  document.getElementById('runBtn').disabled = !(modelLoaded && files.length > 0);
+}
+
 function saveSkills() {
   localStorage.setItem(STORAGE_KEYS.SKILLS, JSON.stringify(skills));
 }
@@ -302,6 +306,7 @@ function renderFiles() {
     list.appendChild(item);
   });
   updateFileCount();
+  updateRunButton();
 }
 
 function getFileIcon(type) {
@@ -436,7 +441,7 @@ async function initializeWllama(modelFile) {
 
     modelLoaded = true;
     setModelStatus('Model ready', 'ready');
-    document.getElementById('runBtn').disabled = files.length === 0;
+    updateRunButton();
     document.getElementById('reconnectModelBtn').disabled = false;
     log('Model loaded successfully', 'success');
   } catch (err) {
@@ -534,7 +539,7 @@ async function runProcessing() {
       log('Processing stopped by user', 'warn');
     }
   } finally {
-    document.getElementById('runBtn').disabled = false;
+    updateRunButton();
     document.getElementById('stopBtn').disabled = true;
     setTimeout(() => {
       document.getElementById('progressContainer').style.display = 'none';
