@@ -64,9 +64,15 @@ function log(message, type = 'info') {
 
 function setModelStatus(text, type = 'loading') {
   const el = document.getElementById('modelStatus');
-  el.textContent = text;
+  if (!el) return;
   el.className = `status-badge ${type}`;
-  el.querySelector('.dot').style.background = 'currentColor';
+  // Only update the text span, keeping the .dot indicator intact
+  const textEl = document.getElementById('modelStatusText');
+  if (textEl) {
+    textEl.textContent = text;
+  } else {
+    el.textContent = text;
+  }
 }
 
 function updateSkillCount() {
