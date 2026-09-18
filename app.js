@@ -1,6 +1,6 @@
-const mammoth = window.mammoth;
-const pdfjsLib = window.pdfjsLib;
-const XLSX = window.XLSX;
+// Use the globals provided by the libraries directly (do NOT redeclare them with
+// const/let, since e.g. xlsx already declares `var XLSX` at top level, which would
+// throw "Identifier 'XLSX' has already been declared").
 const Docx = window.docx;
 const jsPDF = (window.jspdf && window.jspdf.jsPDF) || (window.jsPDF);
 
