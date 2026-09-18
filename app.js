@@ -23,7 +23,6 @@ let settings = {
   maxTokens: 2048
 };
 let lastStructuredResult = null;
-let wasmBlobUrl = null;
 
 // Configure pdf.js worker from the embedded base64 (avoids fetch() on file://)
 function setupPdfWorker() {
@@ -38,19 +37,6 @@ function setupPdfWorker() {
   } catch (e) {
     log('PDF worker setup failed, will use main-thread fallback: ' + e.message, 'warn');
   }
-}
-
-// Decode the embedded wasm base64 to a blob URL (avoids fetch() on file://)
-function getWasmBlobUrl() {
-  if (wasmBlobUrl) return wasmBlobUrl;
-  if (!window.__WLLAMA_WASM_B64) {
-    throw new Error('Embedded wllama.wasm not found');
-  }
-  const bin = atob(window.__WLLAMA_WASM_B64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  wasmBlobUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/wasm' }));
-  return wasmBlobUrl;
 }
 
 function log(message, type = 'info') {
@@ -427,13 +413,14 @@ async function initializeWllama(modelFile) {
     setModelStatus('Loading model...', 'loading');
     document.getElementById('loadModelBtn').disabled = true;
 
-    const wasmUrl = getWasmBlobUrl();
-
+    // The wllama WASM binary is embedded and handled inside lib/wllama.browser.js
+    // (decoded in the main thread and passed to the worker as Module.wasmBinary), so
+    // the "default" path here is only a placeholder that is never actually fetched.
     // WebGPU is only used when available; otherwise fall back to CPU (n_gpu_layers = 0)
     const gpuLayers = (typeof navigator !== 'undefined' && navigator.gpu) ? settings.nGpuLayers : 0;
 
     wllama = new window.Wllama({
-      default: wasmUrl
+      default: 'wllama.wasm'
     });
 
     // loadModel accepts a File/Blob directly (avoids the .gguf URL requirement)

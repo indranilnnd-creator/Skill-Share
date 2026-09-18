@@ -12,7 +12,51 @@ if (!exportRegex.test(wllamaMin)) {
   process.exit(1);
 }
 const stripped = wllamaMin.replace(exportRegex, '');
-const wllamaBrowser = stripped + `
+// wllama creates its worker as a module worker ({type:"module"}), which Chrome/Edge
+// refuse to run from file:// pages (module scripts are CORS-restricted, and file://
+// has a null origin). The worker code contains no import/export, so a classic worker
+// works fine. Patch it here.
+if (stripped.includes('{type:"module"}')) {
+  var finalStripped = stripped.replace(/{type:"module"}/g, '{type:"classic"}');
+  console.log('patched worker type module -> classic');
+} else {
+  console.error('WARNING: could not find {type:"module"} to patch');
+  var finalStripped = stripped;
+}
+
+// On file:// pages, BOTH fetch() and atob() of large payloads inside a Worker hang.
+// wllama's worker normally fetches the wasm via locateFile(), so loading hangs. Fix:
+// decode the wasm bytes in the MAIN thread (where atob works) and pass the Uint8Array
+// to the worker via the module.init message; the worker then sets Module.wasmBinary
+// directly so the emscripten runtime never calls fetch().
+const DECODE_WASM_INLINE =
+  '(function(){var _b=atob(window.__WLLAMA_WASM_B64);var _u=new Uint8Array(_b.length);for(var _i=0;_i<_b.length;_i++)_u[_i]=_b.charCodeAt(_i);return _u;})()';
+
+// Patch 1 (main thread): append the decoded wasm bytes as args[2] of module.init
+const MODULE_INIT_ARGS = 'args:[new Blob([r],{type:"text/javascript"}),this.useAsyncFile]';
+if (finalStripped.includes(MODULE_INIT_ARGS)) {
+  finalStripped = finalStripped.replace(
+    MODULE_INIT_ARGS,
+    'args:[new Blob([r],{type:"text/javascript"}),this.useAsyncFile,' + DECODE_WASM_INLINE + ']'
+  );
+  console.log('patched moduleInit: decode wasm in main thread, pass as args[2]');
+} else {
+  console.error('WARNING: could not find module.init args to patch');
+}
+
+// Patch 2 (worker): set Module.wasmBinary from args[2] (the transferred bytes)
+const GET_MODULE_CALL = 'Module = getWModuleConfig(argMainScriptBlob);';
+if (finalStripped.includes(GET_MODULE_CALL)) {
+  finalStripped = finalStripped.replace(
+    GET_MODULE_CALL,
+    'Module = getWModuleConfig(argMainScriptBlob); Module.wasmBinary = args[2];'
+  );
+  console.log('patched worker: set Module.wasmBinary from args[2]');
+} else {
+  console.error('WARNING: could not find "Module = getWModuleConfig(argMainScriptBlob);" to patch');
+}
+
+const wllamaBrowser = finalStripped + `
 window.Wllama = Wllama;
 window.CacheManager = CacheManager;
 window.ModelManager = ModelManager;
