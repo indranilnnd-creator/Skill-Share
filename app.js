@@ -13,6 +13,7 @@ const STORAGE_KEYS = {
   LAST_RESULT: 'skillshare_last_result'
 };
 
+let WllamaClass = null;
 let wllama = null;
 let modelLoaded = false;
 let currentAbortController = null;
@@ -27,6 +28,33 @@ let settings = {
   maxTokens: 2048
 };
 let lastStructuredResult = null;
+
+async function loadWllamaModule() {
+  if (WllamaClass) return WllamaClass;
+  try {
+    log('Loading wllama module...', 'info');
+    const esmResponse = await fetch('lib/wllama.esm.js');
+    const esmText = await esmResponse.text();
+    const esmBlob = new Blob([esmText], { type: 'application/javascript' });
+    const esmUrl = URL.createObjectURL(esmBlob);
+    const module = await import(esmUrl);
+    WllamaClass = module.Wllama || module.default;
+    if (!WllamaClass) {
+      for (const key of Object.keys(module)) {
+        if (key.toLowerCase().includes('wllama')) {
+          WllamaClass = module[key];
+          break;
+        }
+      }
+    }
+    if (!WllamaClass) throw new Error('Wllama class not found in module');
+    log('wllama module loaded', 'success');
+    return WllamaClass;
+  } catch (err) {
+    log('Failed to load wllama module: ' + err.message, 'error');
+    throw err;
+  }
+}
 
 function log(message, type = 'info') {
   const logArea = document.getElementById('logArea');
@@ -363,15 +391,8 @@ document.getElementById('modelFileInput').addEventListener('change', async (e) =
 });
 
 document.getElementById('reconnectModelBtn').addEventListener('click', async () => {
-  try {
-    const handle = await getStoredModelHandle();
-    if (handle) {
-      const file = await handle.getFile();
-      await initializeWllama(file);
-    }
-  } catch (err) {
-    log('Reconnect failed: ' + err.message, 'error');
-  }
+  const modelFileInput = document.getElementById('modelFileInput');
+  modelFileInput.click();
 });
 
 document.getElementById('forgetModelBtn').addEventListener('click', async () => {
@@ -385,37 +406,16 @@ document.getElementById('forgetModelBtn').addEventListener('click', async () => 
 });
 
 async function getStoredModelHandle() {
-  try {
-    const data = localStorage.getItem(STORAGE_KEYS.MODEL_HANDLE);
-    if (data) {
-      const handle = await deserializeFileHandle(data);
-      if (await handle.requestPermission({ mode: 'read' }) === 'granted') {
-        return handle;
-      }
-    }
-  } catch (e) { log('No stored model handle', 'warn'); }
-  return null;
+  return null; // Handles can't be persisted reliably on file://; user will re-pick
 }
 
 async function storeModelHandle(fileHandle) {
-  try {
-    const serialized = await serializeFileHandle(fileHandle);
-    localStorage.setItem(STORAGE_KEYS.MODEL_HANDLE, serialized);
-    document.getElementById('reconnectModelBtn').disabled = false;
-  } catch (e) { log('Could not store model handle: ' + e.message, 'warn'); }
+  // No-op: handles can't be persisted on file://
+  document.getElementById('reconnectModelBtn').disabled = false;
 }
 
 async function forgetModelHandle() {
-  localStorage.removeItem(STORAGE_KEYS.MODEL_HANDLE);
   document.getElementById('reconnectModelBtn').disabled = true;
-}
-
-async function serializeFileHandle(handle) {
-  return JSON.stringify({ name: handle.name, kind: handle.kind });
-}
-
-async function deserializeFileHandle(data) {
-  return await showOpenFilePicker({ types: [{ accept: { 'application/octet-stream': ['.gguf'] } }] });
 }
 
 async function initializeWllama(modelFile) {
@@ -424,10 +424,14 @@ async function initializeWllama(modelFile) {
     setModelStatus('Loading model...', 'loading');
     document.getElementById('loadModelBtn').disabled = true;
 
-    const wasmUrl = URL.createObjectURL(new Blob([await fetch('lib/wllama.wasm').then(r => r.arrayBuffer())], { type: 'application/wasm' }));
+    await loadWllamaModule();
+
+    const wasmResponse = await fetch('lib/wllama.wasm');
+    const wasmArrayBuffer = await wasmResponse.arrayBuffer();
+    const wasmUrl = URL.createObjectURL(new Blob([wasmArrayBuffer], { type: 'application/wasm' }));
     const modelUrl = URL.createObjectURL(modelFile);
 
-    wllama = new Wllama({
+    wllama = new WllamaClass({
       default: wasmUrl
     });
 
@@ -743,14 +747,6 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 async function init() {
   loadSkills();
   loadSettings();
-  
-  try {
-    const handle = await getStoredModelHandle();
-    if (handle) {
-      document.getElementById('reconnectModelBtn').disabled = false;
-    }
-  } catch (e) { /* ignore */ }
-  
   log('Skill Share initialized. Load a model to begin.', 'info');
 }
 
