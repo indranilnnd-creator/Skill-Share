@@ -193,6 +193,7 @@ label { display: block; margin-bottom: 4px; font-size: 0.8rem; color: var(--text
 </header>
 <nav class="tab-bar" role="tablist">
   <button class="tab-btn active" role="tab" data-tab="skills" aria-selected="true">Skills</button>
+  <button class="tab-btn" role="tab" data-tab="create" aria-selected="false">Create Skill</button>
   <button class="tab-btn" role="tab" data-tab="files" aria-selected="false">Files</button>
   <button class="tab-btn" role="tab" data-tab="process" aria-selected="false">Process</button>
   <button class="tab-btn" role="tab" data-tab="export" aria-selected="false">Export</button>
@@ -221,6 +222,47 @@ label { display: block; margin-bottom: 4px; font-size: 0.8rem; color: var(--text
     <div class="section">
       <div class="section-title">Saved Skills (<span id="skillCount">0</span>)</div>
       <div id="skillList" class="skill-list"></div>
+    </div>
+  </section>
+
+  <section class="tab-content" id="tab-create" role="tabpanel">
+    <div class="section">
+      <div class="section-title">Create Skill from Documents</div>
+      <div class="card">
+        <p style="color:var(--text-muted); line-height:1.6;">Upload your reference documents in the <strong>Files</strong> tab first. Then run the two-step flow below. The model will analyze your documents and ask you the questions it needs answered to write a precise skill &mdash; focusing on information that is <strong>not</strong> already in the documents.</p>
+        <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="generateQuestionsBtn" class="btn" disabled>1. Analyze documents &amp; generate questions</button>
+          <button id="stopQuestionsBtn" class="btn danger" disabled>Stop</button>
+        </div>
+        <div id="questionsProgress" class="progress-bar" style="display:none; margin-top:12px;"><div class="fill"></div></div>
+        <div id="questionsStatus" style="font-size:0.75rem; color:var(--text-muted); display:none; margin-top:4px;"></div>
+      </div>
+    </div>
+
+    <div class="section" id="questionsSection" style="display:none;">
+      <div class="section-title">Answer the questions</div>
+      <div class="card">
+        <div id="questionsList"></div>
+        <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="generateSkillBtn" class="btn secondary">2. Generate skill from answers</button>
+          <button id="stopSkillBtn" class="btn danger" disabled>Stop</button>
+        </div>
+        <div id="skillProgress" class="progress-bar" style="display:none; margin-top:12px;"><div class="fill"></div></div>
+      </div>
+    </div>
+
+    <div class="section" id="skillResultSection" style="display:none;">
+      <div class="section-title">Generated skill</div>
+      <div class="card">
+        <label for="generatedSkillName">Skill name</label>
+        <input type="text" id="generatedSkillName" placeholder="e.g., Sprint Retro Summarizer">
+        <label for="generatedSkillPrompt" style="margin-top:10px;">Instructions</label>
+        <textarea id="generatedSkillPrompt" class="prompt-area" placeholder="The generated instructions will appear here. You can edit them before saving."></textarea>
+        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="saveGeneratedSkillBtn" class="btn">Save to Skill Library</button>
+          <button id="restartSkillBtn" class="btn ghost">Start over</button>
+        </div>
+      </div>
     </div>
   </section>
 

@@ -23,6 +23,9 @@ let settings = {
   maxTokens: 2048
 };
 let lastStructuredResult = null;
+let generatedQuestions = [];
+let questionAnswers = []; // array of { question, answer }
+let skillAbortController = null;
 
 // Configure pdf.js worker from the embedded base64 (avoids fetch() on file://)
 function setupPdfWorker() {
@@ -71,6 +74,10 @@ function updateFileCount() {
 
 function updateRunButton() {
   document.getElementById('runBtn').disabled = !(modelLoaded && files.length > 0);
+}
+
+function updateCreateSkillButton() {
+  document.getElementById('generateQuestionsBtn').disabled = !(modelLoaded && files.length > 0);
 }
 
 function saveSkills() {
@@ -307,6 +314,7 @@ function renderFiles() {
   });
   updateFileCount();
   updateRunButton();
+  updateCreateSkillButton();
 }
 
 function getFileIcon(type) {
@@ -395,6 +403,7 @@ document.getElementById('forgetModelBtn').addEventListener('click', async () => 
     setModelStatus('No model loaded', 'loading');
     modelLoaded = false;
     document.getElementById('runBtn').disabled = true;
+    document.getElementById('generateQuestionsBtn').disabled = true;
     document.getElementById('reconnectModelBtn').disabled = true;
   }
 });
@@ -442,6 +451,7 @@ async function initializeWllama(modelFile) {
     modelLoaded = true;
     setModelStatus('Model ready', 'ready');
     updateRunButton();
+    updateCreateSkillButton();
     document.getElementById('reconnectModelBtn').disabled = false;
     log('Model loaded successfully', 'success');
   } catch (err) {
@@ -729,7 +739,9 @@ document.getElementById('clearAllDataBtn').addEventListener('click', () => {
     setModelStatus('No model loaded', 'loading');
     modelLoaded = false;
     document.getElementById('runBtn').disabled = true;
+    document.getElementById('generateQuestionsBtn').disabled = true;
     document.getElementById('reconnectModelBtn').disabled = true;
+    restartSkillFlow();
     log('All local data cleared', 'warn');
   }
 });
@@ -747,6 +759,223 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
   });
 });
+
+// ============================================================
+// Create Skill from Documents
+// ============================================================
+
+// Build a truncated excerpt of each loaded document to fit the model's context.
+function buildDocumentExcerpt(maxCharsPerDoc = 6000) {
+  return files.map(f => {
+    const text = (f.text || '').trim();
+    const excerpt = text.length > maxCharsPerDoc
+      ? text.substring(0, maxCharsPerDoc) + '\n…[truncated]'
+      : text;
+    return '### ' + f.name + '\n' + excerpt;
+  }).join('\n\n');
+}
+
+// Extract a JSON array/object from a model response (handles ```json fences and prose).
+function extractJson(text) {
+  if (!text) return null;
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  let candidate = fenced ? fenced[1].trim() : text.trim();
+  const start = candidate.search(/[[{]/);
+  if (start === -1) return null;
+  const openChar = candidate[start];
+  const closeChar = openChar === '[' ? ']' : '}';
+  const end = candidate.lastIndexOf(closeChar);
+  if (end <= start) return null;
+  candidate = candidate.substring(start, end + 1);
+  try { return JSON.parse(candidate); } catch (e) { return null; }
+}
+
+// Run a single non-streaming completion and return the text content.
+async function runCompletion(systemPrompt, userPrompt, opts = {}) {
+  const { maxTokens = 1024, temperature = 0.3, abortController = null } = opts;
+  const response = await wllama.createChatCompletion({
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ],
+    max_tokens: maxTokens,
+    temperature: temperature,
+    top_p: settings.topP,
+    abortSignal: abortController ? abortController.signal : undefined
+  });
+  const msg = response && response.choices && response.choices[0] && response.choices[0].message;
+  return (msg && msg.content) || '';
+}
+
+function renderQuestions(questions) {
+  const list = document.getElementById('questionsList');
+  list.innerHTML = '';
+  if (!questions || questions.length === 0) {
+    list.innerHTML = '<p style="color:var(--text-muted);">The model did not identify any critical missing information. You can generate the skill directly.</p>';
+    return;
+  }
+  questions.forEach((q, index) => {
+    const wrap = document.createElement('div');
+    wrap.style.marginBottom = '14px';
+    const label = document.createElement('label');
+    label.style.cssText = 'display:block; margin-bottom:4px; font-size:0.85rem; color:var(--text);';
+    label.textContent = (index + 1) + '. ' + q;
+    const ta = document.createElement('textarea');
+    ta.className = 'prompt-area';
+    ta.style.minHeight = '48px';
+    ta.dataset.qindex = String(index);
+    ta.placeholder = 'Your answer…';
+    wrap.appendChild(label);
+    wrap.appendChild(ta);
+    list.appendChild(wrap);
+  });
+}
+
+async function generateQuestions() {
+  if (!modelLoaded || files.length === 0) return;
+  skillAbortController = new AbortController();
+  const btn = document.getElementById('generateQuestionsBtn');
+  const stopBtn = document.getElementById('stopQuestionsBtn');
+  const progress = document.getElementById('questionsProgress');
+  const status = document.getElementById('questionsStatus');
+  btn.disabled = true;
+  stopBtn.disabled = false;
+  progress.style.display = 'block';
+  progress.querySelector('.fill').style.width = '0%';
+  status.style.display = 'block';
+  status.textContent = 'Analyzing documents…';
+
+  const excerpt = buildDocumentExcerpt();
+  const systemPrompt = 'You are an expert at designing reusable "skills" (written instruction sets) for an AI assistant. A skill has a short name and a detailed set of instructions.';
+  const userPrompt =
+    'Here are the reference documents:\n\n' + excerpt + '\n\n' +
+    'Based on these documents, determine what useful skill(s) could be created to help someone work with this kind of content.\n\n' +
+    'Then identify the critical information that is MISSING from the documents but is necessary to write a precise, high-quality skill. For each missing piece of critical information, formulate ONE clear, specific question to ask the user.\n\n' +
+    'Respond ONLY with a JSON array of strings (the questions). For example: ["What output format should the skill produce?", "Who is the target audience?"]. If nothing important is missing, respond with [].';
+
+  try {
+    const text = await runCompletion(systemPrompt, userPrompt, { maxTokens: 1024, temperature: 0.3, abortController: skillAbortController });
+    const parsed = extractJson(text);
+    if (Array.isArray(parsed)) {
+      generatedQuestions = parsed.filter(q => typeof q === 'string' && q.trim().length > 0);
+      questionAnswers = generatedQuestions.map(q => ({ question: q, answer: '' }));
+      renderQuestions(generatedQuestions);
+      document.getElementById('questionsSection').style.display = 'block';
+      document.getElementById('skillResultSection').style.display = 'none';
+      document.getElementById('generateSkillBtn').textContent = '2. Generate skill from answers';
+      status.textContent = generatedQuestions.length > 0
+        ? 'Generated ' + generatedQuestions.length + ' question(s).'
+        : 'No critical missing information found.';
+      log(generatedQuestions.length > 0
+        ? 'Generated ' + generatedQuestions.length + ' question(s).'
+        : 'No critical missing information found.', 'success');
+    } else {
+      throw new Error('Could not parse a JSON array of questions from the model output.');
+    }
+  } catch (err) {
+    if (err && err.name !== 'AbortError') {
+      log('Question generation failed: ' + (err.message || err), 'error');
+      status.textContent = 'Failed: ' + (err.message || err);
+    } else {
+      status.textContent = 'Stopped.';
+    }
+  } finally {
+    btn.disabled = false;
+    stopBtn.disabled = true;
+    progress.style.display = 'none';
+    status.style.display = 'block';
+  }
+}
+
+async function generateSkillFromAnswers() {
+  if (!modelLoaded) return;
+  // Collect answers from the textareas
+  questionAnswers = generatedQuestions.map((q, index) => {
+    const el = document.querySelector('[data-qindex="' + index + '"]');
+    return { question: q, answer: el ? el.value.trim() : '' };
+  });
+
+  skillAbortController = new AbortController();
+  const btn = document.getElementById('generateSkillBtn');
+  const stopBtn = document.getElementById('stopSkillBtn');
+  const progress = document.getElementById('skillProgress');
+  btn.disabled = true;
+  stopBtn.disabled = false;
+  progress.style.display = 'block';
+  progress.querySelector('.fill').style.width = '0%';
+
+  const excerpt = buildDocumentExcerpt();
+  const qa = questionAnswers
+    .map(a => 'Q: ' + a.question + '\nA: ' + (a.answer || '(no answer provided)'))
+    .join('\n\n');
+  const systemPrompt = 'You are an expert at writing clear, reusable "skills" (written instruction sets) for an AI assistant.';
+  const userPrompt =
+    'Reference documents:\n\n' + excerpt + '\n\n' +
+    'The user answered these clarifying questions:\n\n' + qa + '\n\n' +
+    'Write a complete, self-contained skill based on the documents and the answers above. ' +
+    'Respond ONLY with a JSON object with exactly two string keys: {"name": "<short skill name>", "prompt": "<detailed step-by-step instructions>"}.';
+
+  try {
+    const text = await runCompletion(systemPrompt, userPrompt, { maxTokens: 1600, temperature: 0.3, abortController: skillAbortController });
+    const parsed = extractJson(text);
+    const nameEl = document.getElementById('generatedSkillName');
+    const promptEl = document.getElementById('generatedSkillPrompt');
+    if (parsed && typeof parsed.name === 'string' && typeof parsed.prompt === 'string') {
+      nameEl.value = parsed.name;
+      promptEl.value = parsed.prompt;
+      log('Skill generated. Review and save.', 'success');
+    } else {
+      nameEl.value = 'New Skill';
+      promptEl.value = text;
+      log('Could not parse JSON from output; showing raw text for manual editing.', 'warn');
+    }
+    document.getElementById('skillResultSection').style.display = 'block';
+    document.querySelector('[data-tab="create"]').click();
+  } catch (err) {
+    if (err && err.name !== 'AbortError') {
+      log('Skill generation failed: ' + (err.message || err), 'error');
+      alert('Skill generation failed: ' + (err.message || err));
+    }
+  } finally {
+    btn.disabled = false;
+    stopBtn.disabled = true;
+    progress.style.display = 'none';
+  }
+}
+
+function saveGeneratedSkill() {
+  const name = document.getElementById('generatedSkillName').value.trim();
+  const prompt = document.getElementById('generatedSkillPrompt').value.trim();
+  if (!name || !prompt) {
+    alert('Both a skill name and instructions are required.');
+    return;
+  }
+  skills.push({ name: name, prompt: prompt, enabled: true });
+  saveSkills();
+  renderSkills();
+  log('Saved skill "' + name + '" to the library.', 'success');
+  alert('Saved skill "' + name + '" to the Skills tab.');
+  restartSkillFlow();
+}
+
+function restartSkillFlow() {
+  generatedQuestions = [];
+  questionAnswers = [];
+  document.getElementById('questionsList').innerHTML = '';
+  document.getElementById('questionsSection').style.display = 'none';
+  document.getElementById('skillResultSection').style.display = 'none';
+  document.getElementById('generatedSkillName').value = '';
+  document.getElementById('generatedSkillPrompt').value = '';
+  document.getElementById('generateSkillBtn').textContent = '2. Generate skill from answers';
+  updateCreateSkillButton();
+}
+
+document.getElementById('generateQuestionsBtn').addEventListener('click', generateQuestions);
+document.getElementById('stopQuestionsBtn').addEventListener('click', () => { if (skillAbortController) skillAbortController.abort(); });
+document.getElementById('generateSkillBtn').addEventListener('click', generateSkillFromAnswers);
+document.getElementById('stopSkillBtn').addEventListener('click', () => { if (skillAbortController) skillAbortController.abort(); });
+document.getElementById('saveGeneratedSkillBtn').addEventListener('click', saveGeneratedSkill);
+document.getElementById('restartSkillBtn').addEventListener('click', restartSkillFlow);
 
 async function init() {
   setupPdfWorker();
