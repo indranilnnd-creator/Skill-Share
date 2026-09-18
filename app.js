@@ -1,16 +1,12 @@
-const { mammoth } = window;
-const { pdfjsLib } = window;
+const mammoth = window.mammoth;
+const pdfjsLib = window.pdfjsLib;
 const XLSX = window.XLSX;
-const { docx: Docx } = window;
-const { jsPDF } = window.jspDF || window;
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'lib/pdf.worker.min.js';
+const Docx = window.docx;
+const jsPDF = (window.jspdf && window.jspdf.jsPDF) || (window.jsPDF);
 
 const STORAGE_KEYS = {
   SKILLS: 'skillshare_skills',
-  SETTINGS: 'skillshare_settings',
-  MODEL_HANDLE: 'skillshare_model_handle',
-  LAST_RESULT: 'skillshare_last_result'
+  SETTINGS: 'skillshare_settings'
 };
 
 let wllama = null;
@@ -27,31 +23,34 @@ let settings = {
   maxTokens: 2048
 };
 let lastStructuredResult = null;
+let wasmBlobUrl = null;
 
-async function loadWllamaModule() {
-  if (window.Wllama) return window.Wllama;
+// Configure pdf.js worker from the embedded base64 (avoids fetch() on file://)
+function setupPdfWorker() {
   try {
-    log('Loading wllama module...', 'info');
-    const response = await fetch('lib/wllama.min.js');
-    const code = await response.text();
-    
-    // Wrap the ESM bundle to expose Wllama on window
-    // Remove export statements and assign to window
-    const wrappedCode = code
-      .replace(/export\s+\{[\s\S]*?\}/g, '')  // Remove export { ... }
-      .replace(/export\s+(const|let|var|function|class)\s+/g, '$1 ')  // Remove export keywords
-      + '\nwindow.Wllama = Wllama;\nwindow.CacheManager = CacheManager;\nwindow.ModelManager = ModelManager;\nwindow.Model = Model;\nwindow.WllamaError = WllamaError;\nwindow.WllamaAbortError = WllamaAbortError;\nwindow.WllamaRuntimeError = WllamaRuntimeError;\nwindow.LogLevel = LogLevel;\nwindow.LoggerWithoutDebug = LoggerWithoutDebug;\n';
-    
-    // Execute the wrapped code
-    new Function(wrappedCode)();
-    
-    if (!window.Wllama) throw new Error('Wllama not exposed on window');
-    log('wllama module loaded', 'success');
-    return window.Wllama;
-  } catch (err) {
-    log('Failed to load wllama module: ' + err.message, 'error');
-    throw err;
+    if (window.__PDF_WORKER_B64) {
+      const bin = atob(window.__PDF_WORKER_B64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: 'text/javascript' });
+      pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+    }
+  } catch (e) {
+    log('PDF worker setup failed, will use main-thread fallback: ' + e.message, 'warn');
   }
+}
+
+// Decode the embedded wasm base64 to a blob URL (avoids fetch() on file://)
+function getWasmBlobUrl() {
+  if (wasmBlobUrl) return wasmBlobUrl;
+  if (!window.__WLLAMA_WASM_B64) {
+    throw new Error('Embedded wllama.wasm not found');
+  }
+  const bin = atob(window.__WLLAMA_WASM_B64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  wasmBlobUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/wasm' }));
+  return wasmBlobUrl;
 }
 
 function log(message, type = 'info') {
@@ -422,23 +421,22 @@ async function initializeWllama(modelFile) {
     setModelStatus('Loading model...', 'loading');
     document.getElementById('loadModelBtn').disabled = true;
 
-    await loadWllamaModule();
+    const wasmUrl = getWasmBlobUrl();
 
-    const wasmResponse = await fetch('lib/wllama.wasm');
-    const wasmArrayBuffer = await wasmResponse.arrayBuffer();
-    const wasmUrl = URL.createObjectURL(new Blob([wasmArrayBuffer], { type: 'application/wasm' }));
-    const modelUrl = URL.createObjectURL(modelFile);
+    // WebGPU is only used when available; otherwise fall back to CPU (n_gpu_layers = 0)
+    const gpuLayers = (typeof navigator !== 'undefined' && navigator.gpu) ? settings.nGpuLayers : 0;
 
     wllama = new window.Wllama({
       default: wasmUrl
     });
 
-    await wllama.loadModelFromUrl(modelUrl, {
+    // loadModel accepts a File/Blob directly (avoids the .gguf URL requirement)
+    await wllama.loadModel([modelFile], {
       n_ctx: settings.ctxSize,
       n_threads: settings.nThreads,
-      n_gpu_layers: settings.nGpuLayers,
+      n_gpu_layers: gpuLayers,
       progressCallback: ({ loaded, total }) => {
-        const pct = Math.round((loaded / total) * 100);
+        const pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
         setModelStatus(`Loading model... ${pct}%`, 'loading');
       }
     });
@@ -448,13 +446,6 @@ async function initializeWllama(modelFile) {
     document.getElementById('runBtn').disabled = files.length === 0;
     document.getElementById('reconnectModelBtn').disabled = false;
     log('Model loaded successfully', 'success');
-
-    if ('showOpenFilePicker' in window) {
-      try {
-        const [handle] = await showOpenFilePicker({ types: [{ accept: { 'application/octet-stream': ['.gguf'] } }] });
-        await storeModelHandle(handle);
-      } catch (e) { /* user cancelled */ }
-    }
   } catch (err) {
     log('Model load failed: ' + err.message, 'error');
     setModelStatus('Load failed: ' + err.message, 'error');
@@ -485,7 +476,9 @@ async function runProcessing() {
   document.getElementById('outputArea').textContent = 'Processing...\n';
 
   const skillPrompt = getEnabledSkillsPrompt();
-  const systemPrompt = skillPrompt ? `You have the following skills available:\n\n${skillPrompt}\n\nApply these skills as appropriate to the task.` : '';
+  const systemPrompt = skillPrompt
+    ? `You are a helpful assistant. Follow these skill instructions:\n\n${skillPrompt}`
+    : 'You are a helpful assistant.';
 
   try {
     const allChunks = [];
@@ -495,38 +488,41 @@ async function runProcessing() {
     }
 
     let combinedOutput = '';
-    let totalChunks = allChunks.reduce((sum, f) => sum + f.chunks.length, 0);
+    const totalChunks = allChunks.reduce((sum, f) => sum + f.chunks.length, 0);
     let processedChunks = 0;
 
     for (const { file, chunks } of allChunks) {
       for (let i = 0; i < chunks.length; i++) {
         if (currentAbortController.signal.aborted) throw new Error('Stopped by user');
-        
-        const chunkPrompt = `${systemPrompt}\n\nFile: ${file}\nChunk ${i + 1}/${chunks.length}:\n${chunks[i]}\n\nTask: ${prompt}`;
-        
+
+        const userMessage = `File: ${file} (part ${i + 1} of ${chunks.length})\n\n${chunks[i]}\n\nTask: ${prompt}`;
+
         const progress = Math.round((processedChunks / totalChunks) * 100);
         document.getElementById('progressContainer').querySelector('.fill').style.width = progress + '%';
-        document.getElementById('progressText').textContent = `Processing ${file} - chunk ${i + 1}/${chunks.length} (${progress}%)`;
-        
+        document.getElementById('progressText').textContent = `Processing ${file} - part ${i + 1}/${chunks.length} (${progress}%)`;
+
         const response = await wllama.createChatCompletion({
           messages: [
-            { role: 'system', content: chunkPrompt },
-            { role: 'user', content: prompt }
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage }
           ],
           max_tokens: settings.maxTokens,
           temperature: settings.temperature,
           top_p: settings.topP,
-          stream: true
-        }, currentAbortController.signal);
+          stream: true,
+          abortSignal: currentAbortController.signal
+        });
 
-        let chunkOutput = '';
+        let partOutput = '';
         for await (const chunk of response) {
           if (currentAbortController.signal.aborted) throw new Error('Stopped by user');
-          const token = chunk.choices[0]?.delta?.content || '';
-          chunkOutput += token;
-          combinedOutput += token;
-          document.getElementById('outputArea').textContent = combinedOutput;
-          document.getElementById('outputArea').scrollTop = document.getElementById('outputArea').scrollHeight;
+          const token = extractToken(chunk);
+          if (token) {
+            partOutput += token;
+            combinedOutput += token;
+            document.getElementById('outputArea').textContent = combinedOutput;
+            document.getElementById('outputArea').scrollTop = document.getElementById('outputArea').scrollHeight;
+          }
         }
         processedChunks++;
       }
@@ -534,7 +530,7 @@ async function runProcessing() {
 
     document.getElementById('progressContainer').querySelector('.fill').style.width = '100%';
     document.getElementById('progressText').textContent = 'Complete!';
-    
+
     tryExtractStructured(combinedOutput);
     log('Processing complete', 'success');
   } catch (err) {
@@ -552,6 +548,18 @@ async function runProcessing() {
       document.getElementById('progressText').style.display = 'none';
     }, 2000);
   }
+}
+
+function extractToken(chunk) {
+  if (!chunk) return '';
+  const choices = chunk.choices && chunk.choices[0];
+  if (!choices) return '';
+  const delta = choices.delta || {};
+  if (typeof delta.content === 'string') return delta.content;
+  if (typeof choices.message === 'object' && choices.message && typeof choices.message.content === 'string') return choices.message.content;
+  if (typeof choices.text === 'string') return choices.text;
+  if (typeof chunk.content === 'string') return chunk.content;
+  return '';
 }
 
 function stopProcessing() {
@@ -743,6 +751,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 async function init() {
+  setupPdfWorker();
   loadSkills();
   loadSettings();
   log('Skill Share initialized. Load a model to begin.', 'info');

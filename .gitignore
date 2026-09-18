@@ -1,6 +1,13 @@
 # Models (too large for git, download separately)
 models/*.gguf
 
+# Raw build inputs (re-downloadable; final files are base64-inlined in lib/*.js)
+lib/wllama.min.js
+lib/wllama.esm.js
+lib/wllama.wasm
+lib/pdf.worker.min.js
+release-notes.md
+
 # OS files
 .DS_Store
 Thumbs.db
